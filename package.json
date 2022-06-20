@@ -1,0 +1,27 @@
+{
+  "name": "vue-source",
+  "version": "1.0.0",
+  "description": "## 概述",
+  "main": "index.js",
+  "scripts": {
+    "build": "cross-env NODE_ENV=production rollup --config",
+    "dev": "cross-env NODE_ENV=development rollup --config --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JungleHico/vue-source.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/JungleHico/vue-source/issues"
+  },
+  "homepage": "https://github.com/JungleHico/vue-source#readme",
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "rollup": "^2.75.6",
+    "rollup-plugin-livereload": "^2.0.5",
+    "rollup-plugin-serve": "^1.1.0"
+  }
+}

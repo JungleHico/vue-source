@@ -477,8 +477,8 @@ function patchAttr(el, key, value) {
 
 ```js
 function patchProps(n1, n2, el) {
-  const oldProps = n1.props
-  const newProps = n2.props
+  const oldProps = n1.props || {}
+  const newProps = n2.props || {}
   
   for (const key in newProps) {
     const prev = oldProps[key]
@@ -490,7 +490,7 @@ function patchProps(n1, n2, el) {
   for (const key in oldProps) {
     if (!(key in newProps)) {
       // 移除旧prop
-      patchProp(le, key, oldProps[key], null)
+      patchProp(el, key, oldProps[key], null)
     }
   }
 }
@@ -646,7 +646,7 @@ setTimeout(() => {
 之前的代码，我们通过 `mountElement` 挂载元素，通过 `patchElement` 更新元素，其实挂载元素我们可以看成是一次特殊的更新，这样，我们就可以定义一个通用的渲染器 `patch` ：
 
 ```js
-export function patch(n1, n2, container) {
+function patch(n1, n2, container) {
   if (n1 === n2) {
     return
   }
