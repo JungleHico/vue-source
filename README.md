@@ -1,5 +1,9 @@
 # Vue3 源码解析与实现
 
+该文档参考《Vue.js 设计与实现》一书，对 Vue 3 的源码进行解析，并实现 Vue.js 框架的基本内容。
+
+
+
 ## 概述
 
 Vue.js 由**响应系统**、**渲染器**、**组件化**和**编译器**等模块组成。
@@ -345,7 +349,7 @@ const vnode = h('div', { class: 'node', onClick: handler }, [
 
 ```js
 function mountElement(vnode, container) {
-  const el = (vnode.el = document.createElement(vnode.type)) // 让vnode记录真实dom，用于更新
+  const el = (vnode.el = document.createElement(vnode.type)) // 让 vnode 记录真实 dom，用于更新
 
   // props
   const { props } = vnode
@@ -580,7 +584,7 @@ function patchChildren(n1, n2, container) {
     if (Array.isArray(c1)) {
       c1.forEach(child => unmount(child))
     }
-    container.textContent = c1
+    container.textContent = c2
   } else {
     // 新子节点是数组
     if (Array.isArray(c1)) {
@@ -669,14 +673,1008 @@ function patch(n1, n2, container) {
 
 
 
-
-
 ## 组件化
 
-待续。
+组件就是一组 DOM 元素的封装，我们就可以将页面拆分成多个组件，方便我们维护，而且组件还可以被复用。
+
+
+
+### 渲染组件（挂载）
+
+之前我们的渲染器只支持渲染 HTML 节点，也就是 `vnode.type` 指定了一个标签类型：
+
+```div
+const vnode = {
+  type: 'div'
+}
+```
+
+Vue.js 中，将组件描述为一个对象：
+
+```js
+const MyComponent = {
+  name: 'MyComponent',
+  data() {
+    return {
+      title: 'Hello Component'
+    }
+  }
+}
+```
+
+为了渲染组件，我们可以将组件对象传递给 `vnode.type` ，这样，我们就可以区分 HTML 节点和组件：
+
+```js
+export function patch(n1, n2, container) {
+  if (n1 === n2) {
+    return
+  }
+
+  if (n1 && n1.type !== n2.type) {
+    unmount(n1)
+    n1 = null
+  }
+
+  const { type } = n2
+  if (typeof type === 'string') {
+    // 渲染 HTML 元素
+    processElement(n1, n2, container)
+  } else if (typeof type === 'object') {
+    // 渲染组件
+    processComponent(n1, n2, container)
+  }
+}
+```
+
+为了方便维护，我们将渲染 HTML 元素和渲染组件的业务封装到 `processElement` 和 `processComponent` 函数中：
+
+```js
+function processElement(n1, n2, container) {
+  if (n1 === null) {
+    mountElement(n2, container)
+  } else {
+    patchElement(n1, n2)
+  }
+}
+```
+
+```js
+function processComponent(n1, n2, container) {
+  if (n1 === null) {
+    // 挂载组件
+  } else {
+    // 更新组件
+  }
+}
+```
+
+组件本质上就是一组 DOM 元素，为了渲染组件，我们规定组件必须包含一个 `render` 函数，返回组件内容的虚拟 DOM：
+
+ ```js
+const MyComponent = {
+  name: 'MyComponent',
+  render() {
+    return h('div', null, 'Hello Component')
+  }
+}
+ ```
+
+> 在 Vue.js 中，我们不必定义组件的 `render` 函数，这是因为 Vue.js 的编译器会编译模板，生成一个 `render` 渲染函数。
+
+这样，我们就可以挂载组件的：
+
+```diff
+  function processComponent(n1, n2, container) {
+    if (n1 === null) {
+      // 挂载组件
++     mountComponent(n2, container)
+    } else {
+      // 更新组件
+    }
+  }
+```
+
+```js
+function mountComponent(vnode, container) {
+  const Component = vnode.type
+  const { render } = Component
+  const subTree = render()
+  patch(null, subTree, container)
+}
+```
+
+```html
+<div id="app"></div>
+```
+
+```js
+const vnode = h(MyComponent, null, null)
+patch(null, vnode, document.querySelector('#app'))
+```
+
+我们定义了一个 vnode，并指定 `type` 为我们定义的组件。挂载组件时，通过 `vnode.type` ，我们可以获取到组件的选项对象，通过组件渲染函数 `render` ，我们可以获取到组件的虚拟 DOM，最后调用 `patch` 函数就可以挂载组件对应的内容。
+
+
+
+###组件状态（data）与自更新
+
+#### 组件状态
+
+接下来，我们要定义组件的状态，也就是 `data` 选项。
+
+首先，我们修改组件，指定 `data` 选项并在渲染函数中引用数据：
+
+```js
+const MyComponent = {
+  name: 'MyComponent',
+  data() {
+    return {
+      title: 'Hello Component'
+    }
+  },
+  render() {
+    return h('div', null, `${this.title}`)
+  }
+}
+```
+
+我们定义了一个 `data` 函数，然后返回一个数据对象，之所以定义成一个函数，而不是直接定义一个对象，是为了隔离作用域，当组件被多次复用时，如果是一个对象，就会使得状态被共用，造成数据污染。
+
+为了能在 `render` 函数中通过 `this` 访问组件状态，我们需要通过 `call` 函数改变 `render` 函数 `this` 的指向：
+
+```diff
+  function mountComponent(vnode, container) {
+    const componentOptions = vnode.type
+-   const { render } = componentOptions
++   const { data: dataOptions, render } = componentOptions
+
++   const data = dataOptions()
+-   const subTree = render()
++   const subTree = render.call(data)
+    patch(null, subTree, container)
+  }
+```
+
+这样，组件状态就生效了。
+
+
+
+#### 组件自更新
+
+组件的自更新指的是：当组件状态发生变化时，会触发组件更新，重新渲染组件，这里就需要用到我们之前的响应式数据和副作用函数。
+
+```diff
+  function mountComponent(vnode, container) {
+    const Component = vnode.type
+    const { data: dataOptions, render } = Component
+
+-   const data = dataOptions()
++   const data = reactive(dataOptions())
+
++   // 设置副作用函数，状态修改时自更新
++   effect(() => {
+      const subTree = render.call(data)
+      patch(null, subTree, container)
++   })
+  }
+```
+
+我们通过 `reactive` 方法将组件状态定义为响应式数据，然后将渲染业务设置为副作用函数，当组件状态更新时，就会自动执行副作用函数，重新渲染。
+
+为了验证组件是否实现了自更新，我们修改一下组件：
+
+```diff
+  const MyComponent = {
+    name: 'MyComponent',
+    data() {
+      return {
+        title: 'Hello Component'
+      }
+    },
+    render() {
+      return h(
+        'div',
+-       null,
++       {
++         onClick: () => {
++           this.title = 'Component state updated'
++         }
++       },
+        `${this.title}`
+      )
+    }
+  }
+```
+
+我们添加了一个事件，点击组件时，修改状态，组件也重新渲染，只不过每次调用 `patch` 函数的第一个参数都是 `null` ，所以每次修改状态时都会挂载新组件而不是更新原有组件，这个问题我们下一节会解决。
+
+> 为了避免副作用函数多次执行带来的性能开销，Vue.js 实现了一个调度器，当副作用函数需要重新执行时，将其存到一个去重的微任务队列中，当执行栈清空后，再从微任务队列中取出副作用函数并执行。
+
+
+
+### 组件实例
+
+之前组件更新时没有区分组件是否已经挂载，为了解决这个问题，我们引入组件实例，用来维护组件相关的状态信息。
+
+首先，我们创建组件实例 `instance` ：
+
+```js
+function mountComponent(vnode, container) {
+  // 组件实例
+  const instance = createComponentInstance(vnode)
+  vnode.component = instance // 保存组件实例，便于更新
+}
+```
+
+```js
+// 创建组件实例
+function createComponentInstance(vnode) {
+  const instance = {
+    subTree: null, // 组件渲染内容
+    isMounted: false // 组件是否已被挂载
+  }
+  return instance
+}
+```
+
+然后，我们把之前设置副作用函数的业务封装到 `setupRenderEffect` 函数中：
+
+```js
+function mountComponent(vnode, container) {
+  // 组件实例
+  const instance = createComponentInstance(vnode)
+  vnode.component = instance
+
+  // 设置副作用函数，状态修改时自更新
+  setupRenderEffect(instance, vnode, container)
+}
+```
+
+```js
+export function setupRenderEffect(instance, vnode, container) {
+  const Component = vnode.type
+  const { data: dataOptions, render } = Component
+  const data = reactive(dataOptions())
+
+  // 组件更新函数
+  const componentUpdateFn = () => {
+    const subTree = render.call(data)
+
+    if (!instance.isMounted) {
+      // 挂载
+      patch(null, subTree, container)
+      instance.isMounted = true
+    } else {
+      // 更新
+      patch(instance.subTree, subTree, container)
+    }
+    instance.subTree = subTree
+  }
+
+  // 设置副作用函数
+  effect(componentUpdateFn)
+}
+```
+
+组件首次渲染时，`isMounted` 为 `false` ，旧子树为 `null` ，挂载后 `isMounted` 变为 `true` ，且 `subTree` 保存当前子树，作为下次更新的旧子树。
+
+
+
+### props 与组件被动更新
+
+#### props 基本实现
+
+Vue.js 中，父组件通过 props 向子组件传递数据。
+
+```html
+<MyComponent title="props data"></MyComponent>
+```
+
+模板对应的虚拟 DOM：
+
+```js
+const vnode = {
+  type: MyComponent,
+  props: {
+    msg: 'Hello Props
+  }
+}
+patch(null, vnode, document.querySelector('#app'))
+```
+
+组件的 props 和 HTML 标签的属性差别不大，都是通过虚拟 DOM 的 `props` 进行传递，所以我们需要在组件中显式的声明 `props` 选项：
+
+```js
+const MyComponent = {
+  name: 'MyComponent',
+  props: {
+    title: String
+  },
+  data() {
+    return {}
+  },
+  render() {
+    return h('div', null, `${this.msg}`)
+  }
+}
+```
+
+为了从父组件中获取到 props 数据，我们需要在渲染组件时区分 attrs 和 props。
+
+首先，我们需要为 `instance` 添加更多的状态属性：
+
+```diff
+  function createComponentInstance(vnode) {
+    const instance = {
++     vnode, // 组件虚拟 DOM
++     propsOptions: vnode.type.props || {}, // 组件 props 选项
++     data: {}, // 组件状态
++     props: {}, // 父组件传递数据
+      subTree: null,
+      isMounted: false,
+    }
+    return instance
+  }
+```
+
+然后，我们定义一个 `setupComponent` 方法，用于组件初始化，该方法目前主要包含一个 `initProps` 方法，用于对 `vnode.props` 和 组件的 `props` 选项进行比对，只有在组件的 `props` 声明的数据，才视为父组件传递的 `props` 数据，否则视为普通 HTML 标签的属性。
+
+```diff
+  function mountComponent(vnode, container) {
+    const instance = createComponentInstance(vnode)
+    vnode.component = instance
+
++   // 初始化组件
++   setupComponent(instance)
+
+    setupRenderEffect(instance, vnode, container)
+  }
+```
+
+```js
+function setupComponent(instance) {
+  const { props, type: Component } = instance.vnode
+
+  initProps(instance, props) // 初始化 props
+}
+```
+
+```js
+function initProps(instance, rawProps) {
+  const props = {}
+  const attrs = {}
+  const { propsOptions } = instance
+
+  for (const key in rawProps) {
+    const value = rawProps[key]
+    if (key in propsOptions) {
+      // vnode 传递的 props 在组件的 props 选项中已定义，视为父组件传递的 props，否则视为普通 HTML 元素属性
+      props[key] = value
+    } else {
+      attrs[key] = value
+    }
+  }
+
+  // 将 props 包装为响应式对象（浅响应 shallowReactive）
+  instance.props = reactive(props)
+  instance.attrs = attrs
+}
+```
+
+> Vue 3 中，对于父组件传递的 props 数据，通过 `shallowReactive` 包装为浅响应数据，由于我们之前的 `reactive` 并没有实现深响应，所以可以直接使用。
+
+接着，我们把之前 `setupRenderEffect` 方法中创建响应式数据通过 `instance.data`  进行保存，并且为了方便维护，我们把定义响应式数据的代码也放到 `setupComponent` 方法中：
+
+```diff
+  function setupComponent(instance) {
+    const { props, type: Component } = instance.vnode
++   const { data: dataOptions } = Component
+
+    initProps(instance, props)
+
++   instance.data = reactive(dataOptions())
+  }
+```
+
+```diff
+  function setupRenderEffect(instance, vnode, container) {
+    const Component = vnode.type
++   const { render } = Component
+-   const { data: dataOptions, render } = Component
+-   const data = reactive(dataOptions())
+
+    const componentUpdateFn = () => {
+-     const subTree = render.call(data)
++     const subTree = render.call(instance.data)
+      
+      if (!instance.isMounted) {
+        patch(null, subTree, container)
+        instance.isMounted = true
+      } else {
+        patch(instance.subTree, subTree, container)
+      }
+      instance.subTree = subTree
+    }
+
+    effect(componentUpdateFn)
+  }
+```
+
+与通过 `this` 访问 `data` 类似，我们需要封装一个渲染上下文对象，使得渲染函数内部可以通过 `this` 访问 `data` 和 `props` 等组件选项：
+
+```js
+function createInstanceProxy(instance) {
+  instance.proxy = new Proxy(instance, {
+    get(target, key) {
+      const { data, props } = instance
+      if (data && key in data) {
+        return data[key]
+      }
+      // 如果组件 data 没有当前 key，尝试从 props 中获取
+      if (key in props) {
+        return props[key]
+      }
+      console.error(`组件不存在 ${key} 属性`)
+    },
+    set(target, key, value) {
+      const { data, props } = instance
+      if (data && key in data) {
+        data[key] = value
+        return true
+      }
+      if (key in props) {
+        props[key] = value
+        return true
+      }
+      console.error(`组件不存在 ${key} 属性`)
+      return false
+    }
+  })
+}
+```
+
+```diff
+  function setupComponent(instance) {
+    const { props, type: Component } = instance.vnode
+    const { data: dataOptions } = Component
+
+    initProps(instance, props)
+
++   createInstanceProxy(instance)
+
+    instance.data = reactive(dataOptions())
+  }
+```
+
+```diff
+  function setupRenderEffect(instance, vnode, container) {
+    const Component = vnode.type
+    const { render } = Component
+
+    const componentUpdateFn = () => {
+-     const subTree = render.call(instance.data)
++     const subTree = render.call(instance.proxy)
+      
+      if (!instance.isMounted) {
+        patch(null, subTree, container)
+        instance.isMounted = true
+      } else {
+        patch(instance.subTree, subTree, container)
+      }
+      instance.subTree = subTree
+    }
+
+    effect(componentUpdateFn)
+  }
+```
+
+我们把渲染上下文对象定义为 `instance.proxy` ，然后通过 Proxy 对 `instance` 进行劫持，按需返回 `instance.data` 或者 `instance.props` 的数据。
+
+> Vue.js 中 props 还包含默认值和类型校验等内容，这里不详细展开。
+
+至此，我们就实现了组件 props 传递数据，我们修改测试 Demo ，进行验证：
+
+```js
+const MyComponent = {
+  name: 'MyComponent',
+  props: {
+    msg: String
+  },
+  data() {
+    return {}
+  },
+  render() {
+    return h('div', null, `${this.msg}`)
+  }
+}
+
+const container = document.querySelector('#app')
+const vnode = {
+  type: MyComponent,
+  props: {
+    title: 'props data'
+  }
+}
+patch(null, vnode, container)
+```
+
+
+
+#### 子组件被动更新
+
+当父组件自更新时，如果由此引起子组件更新，我们称之为子组件被动更新，当子组件被动更新时，我们需要检测子组件是否需要更新，例如 `props` 是否发生变化，然后执行相应的更新。
+
+```diff
+  function processComponent(n1, n2, container) {
+    if (n1 === null) {
+      // 挂载组件
+      mountComponent(n2, container)
+    } else {
+      // 更新
++     patchComponent(n1, n2)
+    }
+  }
+```
+
+```js
+function patchComponent(n1, n2) {
+  const instance = (n2.component = n1.component)
+  // 判断 props 是否发生变化
+  if (hasPropsChanged(n1.props, n2.props)) {
+    // 更新 props
+    for (const key in n2.props) {
+      if (key in instance.propsOptions) {
+        instance.props[key] = n2.props[key]
+      }
+    }
+  }
+}
+```
+
+```js
+function hasPropsChanged(prevProps, nextProps) {
+  // props 数量不等，说明有变化
+  if (Object.keys(nextProps).length !== Object.keys(prevProps).length) {
+    return true
+  }
+  for (const key in nextProps) {
+    // 有 props 不相等，说明有变化
+    if (nextProps[key] !== prevProps[key]) {
+      return true
+    }
+  }
+  return false
+}
+```
+
+修改之前的测试 Demo，修改父组件的 props：
+
+```diff
+  const MyComponent = {
+    name: 'MyComponent',
+    props: {
+      msg: String
+    },
+    data() {
+      return {}
+    },
+    render() {
+      return h('div', null, `${this.msg}`)
+    }
+  }
+
+  const container = document.querySelector('#app')
+  const vnode = h(MyComponent, { msg: 'Hello Props' }, null)
+  patch(null, vnode, container)
++ setTimeout(() => {
++   const vnode2 = h(MyComponent, { msg: 'Props updated' }, null)
++   patch(vnode, vnode2, container)
++ }, 2000)
+```
+
+
+
+### setup 函数
+
+Vue 3 新增了组合式 API 和与之对应的 `setup` 函数，在 `setup` 函数中，我们可以创建响应式数据、创建方法、注册生命周期钩子等。
+
+
+
+#### setup 创建数据
+
+`setup` 函数暴露一个数据对象，这个对象可以在渲染函数中通过 `this` 访问。
+
+```js
+const MyComponent = {
+  setup() {
+    const person = reactive({
+      name: 'Tom'
+    })
+
+    return {
+      person
+    }
+  },
+  render() {
+    return h('div', null, `${this.person.name}`)
+  }
+}
+```
+
+`setup` 函数在组件创建之前执行，我们可以在组件初始化函数 `setupComponent` 中调用：
+
+```diff
+  function setupComponent(instance) {
++ 	const { props } = instance.vnode
+-   const { props, type: Component } = instance.vnode
+-   const { data: dataOptions } = Component
+
+    initProps(instance, props)
+
+-   createInstanceProxy(instance)
+
+-   instance.data = reactive(dataOptions())
+
++   setupStatefulComponent(instance)
+  }
+```
+
+```js
+function setupStatefulComponent(instance) {
+  const Component = instance.type
+
+  createInstanceProxy(instance)
+
+  const { setup, data: dataOptions } = Component
+  if (setup) {
+    setup()
+  }
+  if (dataOptions) {
+    instance.data = reactive(dataOptions())
+  }
+}
+```
+
+我们创建了一个 `setupStatefulComponent` 函数，用于管理组件状态，在这个函数中，我们调用组件选项 `setup` 函数。为了方便维护，我们把之前创建组件实例代理以及创建组件状态的业务也放到 `setupStatefulComponent`  函数中。
+
+我们还需要能够在渲染函数中通过 `this` 访问 `setup` 中创建的数据，因此我们需要保存 `setup` 的返回值，并且修改组件实例代理：
+
+```diff
+  function setupStatefulComponent(instance) {
+    const Component = instance.type
+
+    createInstanceProxy(instance)
+
+    const { setup, data: dataOptions } = Component
+    if (setup) {
+-     setup()
++     const setupResult = setup()
++     instance.setupState = setupResult
+    }
+    if (dataOptions) {
+      instance.data = reactive(dataOptions())
+    }
+  }
+```
+
+```diff
+  function createComponentInstance(vnode) {
+    const instance = {
+      vnode,
+      propsOptions: vnode.type.props || {},
+      data: {},
+      props: {},
++     setupState: {}, // setup 暴露的数据
+      subTree: null,
+      isMounted: false,
+    }
+    return instance
+  }
+```
+
+```diff
+  function createInstanceProxy(instance) {
+    instance.proxy = new Proxy(instance, {
+      get(target, key) {
+-       const { data, props } = target
++       const { setupState, data, props } = target
++       if (key in setupState) {
++         return setupState[key]
++       }
+        if (key in data) {
+          return data[key]
+        }
+        if (key in props) {
+          return props[key]
+        }
+        console.error(`组件不存在 ${key} 属性`)
+      },
+      set(target, key, value) {
+-       const { data, props } = target
++       const { setupState, data, props } = target
++       if (key in setupState) {
++         setupState[key] = value
++         return true
++       }
+        if (key in data) {
+          data[key] = value
+          return true
+        }
+        if (key in props) {
+          props[key] = value
+          return true
+        }
+        console.error(`组件不存在 ${key} 属性`)
+        return false
+      }
+    })
+  }
+```
+
+
+
+#### setup 参数
+
+Vue 3 中 `setup` 函数包含两个参数：
+
+- `props` ：组件 `props` 数据；
+- `context` ：一个保存与组件接口相关的数据和方法的对象，包括 `attrs` 、`emit`、`slots` 和 `expose` 。 
+
+对于第一个参数 `props` ，我们直接传递组件的 `props` 传入即可。对于第二个参数，我们先传入之前 `initProps` 函数中获取到的 `attrs`：
+
+```diff
+  function setupStatefulComponent(instance) {
+    const Component = instance.type
+
+    createInstanceProxy(instance)
+
+    const { setup, data: dataOptions } = Component
+    if (setup) {
++     const setupContext = {
++       attrs: instance.attrs
++     }
+-     const setupResult = setup()
++     const setupResult = setup(instance.props, setupContext)
+      instance.setupState = setupResult
+    }
+    if (dataOptions) {
+      instance.data = reactive(dataOptions())
+    }
+  }
+```
+
+
+
+#### emit 自定义事件
+
+Vue.js 中通过 `emit` 自定义事件，向父组件传递数据。
+
+```js
+const MyComponent = {
+  setup(props, { emit }) {
+    emit('create', true)
+  },
+  render() {
+    return h('div', null, 'emit')
+  }
+}
+```
+
+父组件通过监听对应的事件来获取数据：
+
+```html
+<MyComponent @create="handler"></MyComponent>
+```
+
+对应的虚拟 DOM：
+
+```js
+const vnode = {
+  type: MyComponent,
+  props: {
+    onCreate: value => {
+      console.log(value)
+    }
+  }
+}
+```
+
+我们约定，`emit` 触发的事件，父组件通过 `props` 中 `'on'` + 事件名（首字母大写）来监听。
+
+首先，我们定义一个 `emit` 函数，用于自定义事件：
+
+```js
+function emit(instance, event, ...args) {
+  const handlerName = `on${event[0].toUpperCase()}${event.slice(1)}`
+  const handler = instance.vnode.props[handlerName]
+  if (handler) {
+    handler(...args)
+  }
+}
+```
+
+然后，在创建组件实例时，我们定义 `instance.emit` ，用于保存 `emit` 方法：
+
+```diff
+  function createComponentInstance(vnode) {
+    const instance = {
+      vnode,
+      propsOptions: vnode.type.props || {},
++     emit: null,
+      data: {},
+      props: {},
+      setupState: {},
+      subTree: null,
+      isMounted: false,
+    }
+    
++   instance.emit = emit.bind(null, instance)
+    
+    return instance
+  }
+```
+
+`emit` 函数需要第一个参数 `instance` 来指定组件实例，但是我们最终调用 `emit` 函数自定义事件时不需要这个参数，为此，我们可以通过 `bind` 函数来指定 `instance` 参数。
+
+最后，`setup` 函数的第二个参数追加 `instance.emit` ：
+
+```diff
+  function setupStatefulComponent(instance) {
+    const Component = instance.type
+
+    createInstanceProxy(instance)
+
+    const { setup, data: dataOptions } = Component
+    if (setup) {
+      const setupContext = {
+        attrs: instance.attrs,
++       emit: instance.emit
+      }
+      const setupResult = setup(instance.props, setupContext)
+      instance.setupState = setupResult
+    }
+    if (dataOptions) {
+      instance.data = reactive(dataOptions())
+    }
+  }
+```
+
+
+
+#### 注册生命周期
+
+Vue 3 中，`setup` 函数中可以注册生命周期钩子函数，以 `onBeforeMount` 和 `onMounted` 为例，我们将实现这一功能。
+
+首先，为了区分不同组件，也就是在当前组件中注册生命周期钩子，我们需要定义一个变量 `currentInstance`，用于记录当前组件实例，在组件 `setup` 函数调用前，用 `currentInstance` 记录当前组件实例。
+
+```js
+let currentInstance = null
+
+const setCurrentInstance = instance => {
+  currentInstance = instance
+}
+
+const unsetCurrentInstance = () => {
+  currentInstance = null
+}
+```
+
+```diff
+  function setupStatefulComponent(instance) {
+    const Component = instance.type
+
+    createInstanceProxy(instance)
+
+    const { setup, data: dataOptions } = Component
+    if (setup) {
+      const setupContext = {
+        attrs: instance.attrs,
+        emit: instance.emit
+      }
++     setCurrentInstance(instance)
+      const setupResult = setup(instance.props, setupContext)
++     unsetCurrentInstance()
+      instance.setupState = setupResult
+    }
+    if (dataOptions) {
+      instance.data = reactive(dataOptions())
+    }
+  }
+```
+
+接着，我们在组件实例中定义和维护对应的声明周期钩子：
+
+```diff
+  function createComponentInstance(vnode) {
+    const instance = {
+      vnode,
+      propsOptions: vnode.type.props || {},
+      emit: null,
+      data: {},
+      props: {},
+      setupState: {},
+      subTree: null,
+      isMounted: false,
++     beforeMount: null,
++     mounted: null,
+    }
+    
+    instance.emit = emit.bind(null, instance)
+    
+    return instance
+  }
+```
+
+然后，我们定义生命周期钩子函数，这部分的逻辑是可复用的，我们通过 `createHook` 可以创建生命周期钩子函数： 
+
+```js
+// 定义注册声明周期钩子的方法
+function createHook(lifecycle, hook, target = currentInstance) {
+  if (target) {
+    target[lifecycle] = hook
+  }
+}
+
+const onBeforeMount = hook => createHook('beforeMount', hook)
+const onMounted = hook => createHook('mounted', hook)
+```
+
+最后，我们在组件挂载的前后，调用对应的钩子函数：
+
+```diff
+  function setupRenderEffect(instance, vnode, container) {
+    const Component = vnode.type
+    const { render } = Component
+
+    const componentUpdateFn = () => {
+      const subTree = render.call(instance.proxy)
+      
+      if (!instance.isMounted) {
++       const { beforeMount, mounted } = instance
++       invokeHook(beforeMount)
+        patch(null, subTree, container)
++       invokeHook(mounted)
+        instance.isMounted = true
+      } else {
+        patch(instance.subTree, subTree, container)
+      }
+      instance.subTree = subTree
+    }
+
+    effect(componentUpdateFn)
+  }
+```
+
+```js
+export const invokeHook = hook => {
+  if (hook) {
+    hook()
+  }
+}
+```
+
+编写测试 Demo，验证生命周期钩子是否生效：
+
+```js
+const MyComponent = {
+  setup() {
+    onBeforeMount(() => {
+      console.log('onBeforeMount')
+    })
+    onMounted(() => {
+      console.log('onMounted')
+    })
+  },
+  render() {
+    return h('div', null, 'Lifecircle')
+  }
+}
+const vnode = h(MyComponent, null, null)
+patch(null, vnode, document.querySelector('#app'))
+```
 
 
 
 ## 编译器
 
-待续。
+略。

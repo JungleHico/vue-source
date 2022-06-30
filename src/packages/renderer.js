@@ -1,3 +1,10 @@
+import {
+  createComponentInstance,
+  setupComponent,
+  hasPropsChanged,
+  setupRenderEffect
+} from './component'
+
 export function h(type, props, children) {
   return {
     type,
@@ -18,12 +25,31 @@ export function patch(n1, n2, container) {
     n1 = null
   }
 
+  const { type } = n2
+  if (typeof type === 'string') {
+    processElement(n1, n2, container)
+  } else if (typeof type === 'object') {
+    processComponent(n1, n2, container)
+  }
+}
+
+function processElement(n1, n2, container) {
   if (n1 === null) {
     // 挂载节点
     mountElement(n2, container)
   } else {
     // 更新节点
     patchElement(n1, n2)
+  }
+}
+
+function processComponent(n1, n2, container) {
+  if (n1 === null) {
+    // 挂载组件
+    mountComponent(n2, container)
+  } else {
+    // 更新
+    patchComponent(n1, n2)
   }
 }
 
@@ -121,7 +147,7 @@ function patchChildren(n1, n2, container) {
     if (Array.isArray(c1)) {
       c1.forEach(child => unmount(child))
     }
-    container.textContent = c1
+    container.textContent = c2
   } else {
     // 新子节点是数组
     if (Array.isArray(c1)) {
@@ -140,5 +166,30 @@ function unmount(vnode) {
   const parent = vnode.el.parentNode
   if (parent) {
     parent.removeChild(vnode.el)
+  }
+}
+
+function mountComponent(vnode, container) {
+  // 组件实例
+  const instance = createComponentInstance(vnode)
+  vnode.component = instance // 保存组件实例，便于更新
+
+  // 初始化组件
+  setupComponent(instance)
+
+  // 设置组件副作用函数，状态修改时自更新
+  setupRenderEffect(instance, vnode, container)
+}
+
+function patchComponent(n1, n2) {
+  const instance = (n2.component = n1.component)
+  // 判断 props 是否发生变化
+  if (hasPropsChanged(n1.props, n2.props)) {
+    // 更新 props
+    for (const key in n2.props) {
+      if (key in instance.propsOptions) {
+        instance.props[key] = n2.props[key]
+      }
+    }
   }
 }
