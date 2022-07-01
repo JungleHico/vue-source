@@ -639,12 +639,6 @@ setTimeout(() => {
 
 
 
-##### Diff 算法
-
-待续。
-
-
-
 #### 通用渲染器
 
 之前的代码，我们通过 `mountElement` 挂载元素，通过 `patchElement` 更新元素，其实挂载元素我们可以看成是一次特殊的更新，这样，我们就可以定义一个通用的渲染器 `patch` ：
@@ -673,9 +667,465 @@ function patch(n1, n2, container) {
 
 
 
+#### 简单 Diff 算法
+
+之前更新子节点时，如果新旧子节点都是一组节点，需要将旧节点全部销毁，然后再创建新节点，由于 DOM 操作比较耗费性能，因此，我们需要通过 Diff 算法尽可能多地复用旧节点，减少 DOM 操作来提升性能。
+
+
+
+##### 实现思路
+
+首先，我们把 Diff 算法更新子节点的业务封装到一个 `patchKeyedChildren` 函数中：
+
+```diff
+  function patchChildren(n1, n2, container) {
+    const c1 = n1.children
+    const c2 = n2.children
+
+    if (typeof c2 === 'string') {
+      if (Array.isArray(c1)) {
+        c1.forEach(child => unmount(child))
+      }
+      container.textContent = c2
+    } else {
+      if (Array.isArray(c1)) {
+-       c1.forEach(child => unmount(child))
+-       c2.forEach(child => mountElement(child, container))
++       diff(c1, c2, container)
+      } else {
+        container.innerHTML = ''
+        c2.forEach(child => mountElement(child, container))
+      }
+    }
+  }
+```
+
+```js
+function diff(c1, c2, container) {
+  // Diff
+}
+```
+
+
+
+**子节点数量一致**
+
+最理想的情况，当新旧子节点数组的子节点数量一致时，只需要逐个更新子节点即可，如果子节点的类型一致，则只需要更新子节点内容，不需要销毁旧子节点。
+
+```js
+const oldVNode = {
+  type: 'div',
+  children: [
+    { type: 'p', children: '1' },
+    { type: 'p', children: '2' },
+    { type: 'p', children: '3' }
+  ]
+}
+
+const newVNode = {
+  type: 'div',
+  children: [
+    { type: 'p', children: '4' },
+    { type: 'p', children: '5' },
+    { type: 'p', children: '6' }
+  ]
+}
+```
+
+```js
+function diff(c1, c2, container) {
+  for (let i = 0; i < c1.length; i++) {
+    patch(c1[i], c2[i], container)
+  }
+}
+```
+
+
+
+**子节点数量不一致**
+
+当子节点的数量不一致时，我们需要修改 Diff 算法：只遍历新旧子节点数组中数量较少的那个，然后进行更新，如果旧子节点数量较多，则需要删除多余节点；如果新子节点数量就多，则添加节点。
+
+```js
+function diff(c1, c2, container) {
+  const oldLength = c1.length
+  const newLength = c2.length
+  const commonLength = Math.min(oldLength, newLength)
+  for (let i = 0; i < commonLength; i++) {
+    patch(c1[i], c2[i], container)
+  }
+  if (oldLength > newLength) {
+    // 移除旧子节点
+    for (let i = commonLength; i < oldLength; i++) {
+      unmount(c1[i])
+    }
+  } else {
+    // 添加新子节点
+    for (let i = commonLength; i < newLength; i++) {
+      patch(null, c2[i], container)
+    }
+  }
+}
+```
+
+
+
+**基于 key 复用节点**
+
+Vue.js 中，为了提高 `v-for` 渲染列表的更新效率，我们需要对每个列表项追加一个唯一标识属性 `key` ，经过编译器编译后，会为 vnode 追加一个 `key` 属性。
+
+```js
+const oldVNode = {
+  type: 'ul',
+  children: [
+    { type: 'li', children: '1', key: 1 },
+    { type: 'li', children: '2', key: 2 },
+    { type: 'li', children: '3', key: 3 }
+  ]
+}
+
+const newVNode = {
+  type: 'ul',
+  children: [
+    { type: 'li', children: '2', key: 2 },
+    { type: 'li', children: '3', key: 3 },
+    { type: 'li', children: '1', key: 1 }
+  ]
+}
+```
+
+这样，我们就可以根据 `key` 复用 DOM 节点，即使节点的位置发生变化，也可以通过 `key` 找到对应的节点，特别是当子节点的类型不一致时，这种方式就能尽可能多地复用节点。
+
+```js
+const oldVNode = {
+  type: 'div',
+  children: [
+    { type: 'div', children: '1', key: 1 },
+    { type: 'p', children: '2', key: 2 },
+    { type: 'span', children: '3', key: 3 }
+  ]
+}
+
+const newVNode = {
+  type: 'div',
+  children: [
+    { type: 'span', children: '3', key: 3 },
+    { type: 'div', children: '1', key: 1 },
+    { type: 'p', children: '2', key: 2 }
+  ]
+}
+```
+
+```js
+function diff(c1, c2, container) {
+  for (let i = 0; i < c2.length; i++) {
+    const newVNode = c2[i]
+    for (let j = 0; j < c1.length; j++) {
+      const oldVNode = c1[j]
+      if (newVNode.key === oldVNode.key) {
+        patch(oldVNode, newVNode, container)
+        break
+      }
+    }
+  }
+}
+```
+
+
+
+##### 移动元素
+
+基于节点 `key` 值，我们可以复用旧子节点，但是光复用旧子节点还不够，我们还需要让旧子节点按新子节点的顺序进行排列，为了减少排列次数，我们应该根据节点的相对位置进行调整，因此我们需要找出哪些元素需要移动。例如下面的例子，第二个和第三个子节点的相对位置不变，我们只需要将第一个子节点插入到第三个子节点后面。
+
+```js
+const oldVNode = {
+  type: 'div',
+  children: [
+    { type: 'div', children: '1', key: 1 },
+    { type: 'p', children: '2', key: 2 },
+    { type: 'span', children: '3', key: 3 }
+  ]
+}
+
+const newVNode = {
+  type: 'div',
+  children: [
+    { type: 'p', children: '2', key: 2 },
+    { type: 'span', children: '3', key: 3 },
+    { type: 'div', children: '1', key: 1 }
+  ]
+}
+```
+
+```diff
+  function diff(c1, c2, container) {
++   let lastIndex = 0
+    for (let i = 0; i < c2.length; i++) {
+      const newVNode = c2[i]
+      for (let j = 0; j < c1.length; j++) {
+        const oldVNode = c1[j]
+        if (newVNode.key === oldVNode.key) {
+          patch(oldVNode, newVNode, container)
++         if (j < lastIndex) {
++           // 索引值小于 lastIndex，需要移动
++           const prevVNode = c2[i - 1]
++           if (prevVNode) {
++             // 移动到上一个子节点后面
++             const anchor = prevVNode.el.nextSibling
++             container.insertBefore(newVNode.el, anchor)
++           }
++         } else {
++           lastIndex = j
++         }
+          break
+        }
+      }
+    }
+  }
+```
+
+首先我们引入一个变量 `lastIndex` ，记录我们遍历旧子节点数组查找相同 `key` 子节点遇到的最大索引值。由于我们是从前往后遍历旧子节点数组，如果子节点的相对位置不变，那么根据相同 `key` 找到的子节点索引值应该比上一个子节点大，这时我们只需要更新 `lastIndex` 的值；如果索引值比上一个节点小，说明旧子节点的位置相对靠前，需要将该节点移动到上一个子节点的后面。
+
+
+
+##### 添加新元素
+
+上一节，我们已经实现了对 `key` 值相同的子节点的复用，接下来，对于新增的元素，我们需要将其挂载到合适的位置。
+
+首先，我们定义一个变量 `find` ，用于标识子节点在旧子节点中是否存在：
+
+````diff
+  function diff(c1, c2, container) {
+    let lastIndex = 0
+    for (let i = 0; i < c2.length; i++) {
+      const newVNode = c2[i]
++     let find = false
+      for (let j = 0; j < c1.length; j++) {
+        const oldVNode = c1[j]
+        if (newVNode.key === oldVNode.key) {
++         find = true
+          patch(oldVNode, newVNode, container)
+          if (j < lastIndex) {
+            const prevVNode = c2[i - 1]
+            if (prevVNode) {
+              const anchor = prevVNode.el.nextSibling
+              container.insertBefore(newVNode.el, anchor)
+            }
+          } else {
+            lastIndex = j
+          }
+          break
+        }
+      }
+
++     if (!find) {
++       // 添加新节点
++     }
+    }
+  }
+````
+
+在之前的 `patchElement` 函数中，我们通过 `appendChild` 将新节点添加到 `container` 的最后，现在我们需要修改这部分逻辑，追加一个参数 `anchor` ，用于指定新增的元素挂载在 `container` 的什么位置：
+
+```diff
+- function patch(n1, n2, container) {
++ function patch(n1, n2, container, anchor = null) {
+    if (n1 === n2) {
+      return
+    }
+
+    if (n1.type !== n2.type) {
+      unmount(n1)
+      n1 = null
+    }
+
+    if (n1 === null) {
+-     mountElement(n2, container)
++     mountElement(n2, container, anchor)
+    } else {
+      patchElement(n1, n2)
+    }
+  }
+```
+
+```diff
+- function mountElement(vnode, container) {
++ function mountElement(vnode, container, anchor = null) {
+    const el = (vnode.el = document.createElement(vnode.type))
+
+    // ...
+
+-   container.appendChild(el)
++   container.insertBefore(el, anchor)
+  }
+```
+
+然后，我们就可以挂载新子节点：
+
+```diff
+  function diff(c1, c2, container) {
+    let lastIndex = 0
+    for (let i = 0; i < c2.length; i++) {
+      const newVNode = c2[i]
+      let find = false
+      for (let j = 0; j < c1.length; j++) {
+        const oldVNode = c1[j]
+        if (newVNode.key === oldVNode.key) {
+          find = true
+          patch(oldVNode, newVNode, container)
+          if (j < lastIndex) {
+            const prevVNode = c2[i - 1]
+            if (prevVNode) {
+              const anchor = prevVNode.el.nextSibling
+              container.insertBefore(newVNode.el, anchor)
+            }
+          } else {
+            lastIndex = j
+          }
+          break
+        }
+      }
+
+      if (!find) {
++       let anchor = null
++       const prevVNode = c2[i - 1]
++       if (prevVNode) {
++         anchor = prevVNode.el.nextSibling
++       } else {
++         anchor = container.firstChild
++       }
++       patch(null, newVNode, container, anchor)
+      }
+    }
+  }
+```
+
+对于新增的子节点，将其挂载到上一个子节点的后面，如果是第一个子节点，则挂载到 `container` 的最前面。
+
+
+
+##### 移除不存在元素
+
+除了添加新元素，我们还应该遍历旧子节点数组，移除新子节点数组中不存在的元素。
+
+```diff
+  function diff(c1, c2, container) {
+    let lastIndex = 0
+    for (let i = 0; i < c2.length; i++) {
+      // ...
+    }
+
++   for (let i = 0; i < c1.length; i++) {
++     const oldVNode = c1[i]
++     const has = c2.find(newVNode => newVNode.key === oldVNode.key)
++     if (!has) {
++       unmount(oldVNode)
++     }
++   }
+  }
+```
+
+
+
+##### 通用 Diff 算法
+
+我们分别实现了没有 `key` 和基于 `key` 的 Diff 算法，现在我们对代码进行合并：
+
+```js
+function diff(c1, c2, container) {
+  if (c1.every(vnode => 'key' in vnode)) {
+    // 基于 key
+    patchKeyedChildren(c1, c2, container)
+  } else {
+    // 没有 key
+    patchUnkeyedChildren(c1, c2, container)
+  }
+}
+```
+
+```js
+function patchKeyedChildren(c1, c2, container) {
+  let lastIndex = 0
+  for (let i = 0; i < c2.length; i++) {
+    const newVNode = c2[i]
+    let find = false
+    for (let j = 0; j < c1.length; j++) {
+      const oldVNode = c1[j]
+      if (newVNode.key === oldVNode.key) {
+        find = true
+        patch(oldVNode, newVNode, container)
+        if (j < lastIndex) {
+          const prevVNode = c2[i - 1]
+          if (prevVNode) {
+            const anchor = prevVNode.el.nextSibling
+            container.insertBefore(newVNode.el, anchor)
+          }
+        } else {
+          lastIndex = j
+        }
+        break
+      }
+    }
+
+    if (!find) {
+      let anchor = null
+      const prevVNode = c2[i - 1]
+      if (prevVNode) {
+        anchor = prevVNode.el.nextSibling
+      } else {
+        anchor = container.firstChild
+      }
+      patch(null, newVNode, container, anchor)
+    }
+  }
+
+  for (let i = 0; i < c1.length; i++) {
+    const oldVNode = c1[i]
+    const has = c2.find(newVNode => newVNode.key === oldVNode.key)
+    if (!has) {
+      unmount(oldVNode)
+    }
+  }
+}
+```
+
+```js
+function patchUnkeyedChildren(c1, c2, container) {
+  const oldLength = c1.length
+  const newLength = c2.length
+  const commonLength = Math.min(oldLength, newLength)
+  for (let i = 0; i < commonLength; i++) {
+    patch(c1[i], c2[i], container)
+  }
+  if (oldLength > newLength) {
+    for (let i = commonLength; i < oldLength; i++) {
+      unmount(c1[i])
+    }
+  } else {
+    for (let i = commonLength; i < newLength; i++) {
+      patch(null, c2[i], container)
+    }
+  }
+}
+```
+
+
+
+#### 双端 Diff 算法
+
+略。
+
+
+
+#### 快速 Diff 算法
+
+略。
+
+
+
 ## 组件化
 
-组件就是一组 DOM 元素的封装，我们就可以将页面拆分成多个组件，方便我们维护，而且组件还可以被复用。
+组件就是一组 DOM 元素的封装，我们可以将页面拆分成多个组件，方便我们维护，而且组件还可以被复用。
 
 
 
@@ -705,7 +1155,7 @@ const MyComponent = {
 为了渲染组件，我们可以将组件对象传递给 `vnode.type` ，这样，我们就可以区分 HTML 节点和组件：
 
 ```js
-export function patch(n1, n2, container) {
+export function patch(n1, n2, container, anchor = null) {
   if (n1 === n2) {
     return
   }
@@ -718,7 +1168,7 @@ export function patch(n1, n2, container) {
   const { type } = n2
   if (typeof type === 'string') {
     // 渲染 HTML 元素
-    processElement(n1, n2, container)
+    processElement(n1, n2, container, anchor)
   } else if (typeof type === 'object') {
     // 渲染组件
     processComponent(n1, n2, container)
@@ -729,9 +1179,9 @@ export function patch(n1, n2, container) {
 为了方便维护，我们将渲染 HTML 元素和渲染组件的业务封装到 `processElement` 和 `processComponent` 函数中：
 
 ```js
-function processElement(n1, n2, container) {
+function processElement(n1, n2, container, anchor = null) {
   if (n1 === null) {
-    mountElement(n2, container)
+    mountElement(n2, container, anchor)
   } else {
     patchElement(n1, n2)
   }
@@ -761,7 +1211,7 @@ const MyComponent = {
 
 > 在 Vue.js 中，我们不必定义组件的 `render` 函数，这是因为 Vue.js 的编译器会编译模板，生成一个 `render` 渲染函数。
 
-这样，我们就可以挂载组件的：
+这样，我们就可以挂载组件：
 
 ```diff
   function processComponent(n1, n2, container) {
@@ -796,7 +1246,7 @@ patch(null, vnode, document.querySelector('#app'))
 
 
 
-###组件状态（data）与自更新
+### 组件状态（data）与自更新
 
 #### 组件状态
 

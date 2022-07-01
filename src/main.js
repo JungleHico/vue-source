@@ -23,6 +23,30 @@ import { onBeforeMount, onMounted } from './packages/apiLifecircle'
 //   patch(vnode1, vnode2, container)
 // }, 2000)
 
+// diff
+const oldVNode = {
+  type: 'div',
+  children: [
+    { type: 'div', children: '1', key: 1 },
+    { type: 'p', children: '2', key: 2 },
+    { type: 'span', children: '3', key: 3 }
+  ]
+}
+
+const newVNode = {
+  type: 'div',
+  children: [
+    { type: 'span', children: '3', key: 3 },
+    { type: 'div', children: '1', key: 1 },
+    { type: 'p', children: '2', key: 2 }
+  ]
+}
+const container = document.querySelector('#app')
+patch(null, oldVNode, container)
+setTimeout(() => {
+  patch(oldVNode, newVNode, container)
+}, 2000)
+
 // component data & props
 // const MyComponent = {
 //   name: 'MyComponent',
@@ -55,36 +79,36 @@ import { onBeforeMount, onMounted } from './packages/apiLifecircle'
 // }, 2000)
 
 // component setup
-const MyComponent = {
-  setup(props, { emit }) {
-    onBeforeMount(() => {
-      console.log('onBeforeMount')
-    })
-    onMounted(() => {
-      console.log('onMounted')
-    })
+// const MyComponent = {
+//   setup(props, { emit }) {
+//     onBeforeMount(() => {
+//       console.log('onBeforeMount')
+//     })
+//     onMounted(() => {
+//       console.log('onMounted')
+//     })
 
-    emit('create', true)
+//     emit('create', true)
 
-    const person = reactive({
-      name: 'Tom'
-    })
+//     const person = reactive({
+//       name: 'Tom'
+//     })
 
-    return {
-      person
-    }
-  },
-  render() {
-    return h('div', null, `${this.person.name}`)
-  }
-}
-const vnode = h(
-  MyComponent,
-  {
-    onCreate: value => {
-      console.log(value)
-    }
-  },
-  null
-)
-patch(null, vnode, document.querySelector('#app'))
+//     return {
+//       person
+//     }
+//   },
+//   render() {
+//     return h('div', null, `${this.person.name}`)
+//   }
+// }
+// const vnode = h(
+//   MyComponent,
+//   {
+//     onCreate: value => {
+//       console.log(value)
+//     }
+//   },
+//   null
+// )
+// patch(null, vnode, document.querySelector('#app'))

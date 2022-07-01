@@ -14,7 +14,7 @@ export function h(type, props, children) {
 }
 
 // 挂载与更新节点
-export function patch(n1, n2, container) {
+export function patch(n1, n2, container, anchor = null) {
   if (n1 === n2) {
     return
   }
@@ -27,16 +27,16 @@ export function patch(n1, n2, container) {
 
   const { type } = n2
   if (typeof type === 'string') {
-    processElement(n1, n2, container)
+    processElement(n1, n2, container, anchor)
   } else if (typeof type === 'object') {
     processComponent(n1, n2, container)
   }
 }
 
-function processElement(n1, n2, container) {
+function processElement(n1, n2, container, anchor = null) {
   if (n1 === null) {
     // 挂载节点
-    mountElement(n2, container)
+    mountElement(n2, container, anchor)
   } else {
     // 更新节点
     patchElement(n1, n2)
@@ -53,7 +53,7 @@ function processComponent(n1, n2, container) {
   }
 }
 
-function mountElement(vnode, container) {
+function mountElement(vnode, container, anchor = null) {
   const el = (vnode.el = document.createElement(vnode.type)) // 让vnode记录真实dom，用于更新
 
   // props
@@ -75,7 +75,8 @@ function mountElement(vnode, container) {
     })
   }
 
-  container.appendChild(el)
+  // container.appendChild(el)
+  container.insertBefore(el, anchor)
 }
 
 function patchElement(n1, n2) {
@@ -151,13 +152,89 @@ function patchChildren(n1, n2, container) {
   } else {
     // 新子节点是数组
     if (Array.isArray(c1)) {
-      // 新旧子节点都是数组，Diff
-      c1.forEach(child => unmount(child))
-      c2.forEach(child => mountElement(child, container))
+      diff(c1, c2, container)
     } else {
       // 新子节点是数组，旧子节点是文本，清空
       container.innerHTML = ''
       c2.forEach(child => mountElement(child, container))
+    }
+  }
+}
+
+// Diff
+function diff(c1, c2, container) {
+  if (c1.every(vnode => 'key' in vnode)) {
+    // 基于 key
+    patchKeyedChildren(c1, c2, container)
+  } else {
+    // 没有 key
+    patchUnkeyedChildren(c1, c2, container)
+  }
+}
+
+function patchKeyedChildren(c1, c2, container) {
+  let lastIndex = 0
+  for (let i = 0; i < c2.length; i++) {
+    const newVNode = c2[i]
+    let find = false
+    for (let j = 0; j < c1.length; j++) {
+      const oldVNode = c1[j]
+      if (newVNode.key === oldVNode.key) {
+        find = true
+        patch(oldVNode, newVNode, container)
+        if (j < lastIndex) {
+          // 索引值小于 lastIndex，需要移动
+          const prevVNode = c2[i - 1]
+          if (prevVNode) {
+            // 移动到上一个子节点后面
+            const anchor = prevVNode.el.nextSibling
+            container.insertBefore(newVNode.el, anchor)
+          }
+        } else {
+          lastIndex = j
+        }
+        break
+      }
+    }
+
+    if (!find) {
+      // 添加新节点
+      let anchor = null
+      const prevVNode = c2[i - 1]
+      if (prevVNode) {
+        anchor = prevVNode.el.nextSibling
+      } else {
+        anchor = container.firstChild
+      }
+      patch(null, newVNode, container, anchor)
+    }
+  }
+
+  for (let i = 0; i < c1.length; i++) {
+    const oldVNode = c1[i]
+    const has = c2.find(newVNode => newVNode.key === oldVNode.key)
+    if (!has) {
+      unmount(oldVNode)
+    }
+  }
+}
+
+function patchUnkeyedChildren(c1, c2, container) {
+  const oldLength = c1.length
+  const newLength = c2.length
+  const commonLength = Math.min(oldLength, newLength)
+  for (let i = 0; i < commonLength; i++) {
+    patch(c1[i], c2[i], container)
+  }
+  if (oldLength > newLength) {
+    // 移除旧子节点
+    for (let i = commonLength; i < oldLength; i++) {
+      unmount(c1[i])
+    }
+  } else {
+    // 添加新子节点
+    for (let i = commonLength; i < newLength; i++) {
+      patch(null, c2[i], container)
     }
   }
 }
